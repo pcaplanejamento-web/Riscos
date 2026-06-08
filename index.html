@@ -59,21 +59,6 @@
     <button id="btn-retry" class="btn-primary">Tentar novamente</button>
   </div>
 
-  <!-- Not configured -->
-  <div id="not-configured" class="state-screen hidden">
-    <div class="config-card">
-      <h2>⚙️ Configuração necessária</h2>
-      <p>Para usar o sistema, você precisa:</p>
-      <ol>
-        <li>Abra a planilha Google Sheets e acesse <strong>Extensões → Apps Script</strong></li>
-        <li>Cole o conteúdo de <code>apps-script/Code.gs</code> e salve</li>
-        <li>Clique em <strong>Implantar → Novo implante</strong>, tipo <em>Aplicativo Web</em>, acesso <em>Qualquer pessoa</em></li>
-        <li>Copie a URL gerada e cole em <code>script.js</code> na variável <code>APPS_SCRIPT_URL</code></li>
-        <li>Faça o push para o GitHub e recarregue esta página</li>
-      </ol>
-    </div>
-  </div>
-
   <!-- Main content -->
   <div id="table-container" class="hidden">
     <div id="table-wrapper">

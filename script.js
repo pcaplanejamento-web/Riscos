@@ -1,7 +1,12 @@
 // ─────────────────────────────────────────────────────────────────
-// CONFIGURAÇÃO — substitua pela URL gerada ao implantar o Apps Script
+// CONFIGURAÇÃO
 // ─────────────────────────────────────────────────────────────────
+const SHEET_ID        = '15oK4dL7RcFp8hTqIFASH0dQdTvVqsweF-w3D6CDCS6w';
+const SHEET_NAME      = 'GERALDADOS';
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyEOJ-VMFPBMd0nQDoLiTjHDu6nbOpfokr_qjp8okJGwR-YrqGWAp6v_8YsFfQy8oFh/exec';
+
+// URL da API do Google Visualization — funciona direto no navegador sem CORS
+const GVIZ_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}`;
 
 // Índices das colunas (0-based)
 const COL_B_INDEX = 1;   // LOCAL
@@ -10,106 +15,93 @@ const PAGE_SIZE   = 100;
 
 // Estado
 let headers      = [];
-let allRows      = []; // [{ data: [...], sheetRow: N }, ...]
+let allRows      = [];  // [{ data: [...], sheetRow: N }, ...]
 let filteredRows = [];
 let currentPage  = 0;
 
 // DOM
-const loadingEl       = document.getElementById('loading');
-const errorEl         = document.getElementById('error-msg');
-const errorTextEl     = document.getElementById('error-text');
-const notConfiguredEl = document.getElementById('not-configured');
-const tableContainer  = document.getElementById('table-container');
-const tableHead       = document.getElementById('table-head');
-const tableBody       = document.getElementById('table-body');
-const filterLocal     = document.getElementById('filter-local');
-const searchInput     = document.getElementById('search');
-const clearSearchBtn  = document.getElementById('btn-clear-search');
-const rowCountEl      = document.getElementById('row-count');
-const btnPrev         = document.getElementById('btn-prev');
-const btnNext         = document.getElementById('btn-next');
-const pageInfoEl      = document.getElementById('page-info');
-const toastEl         = document.getElementById('toast');
-const btnRetry        = document.getElementById('btn-retry');
+const loadingEl      = document.getElementById('loading');
+const errorEl        = document.getElementById('error-msg');
+const errorTextEl    = document.getElementById('error-text');
+const tableContainer = document.getElementById('table-container');
+const tableHead      = document.getElementById('table-head');
+const tableBody      = document.getElementById('table-body');
+const filterLocal    = document.getElementById('filter-local');
+const searchInput    = document.getElementById('search');
+const clearSearchBtn = document.getElementById('btn-clear-search');
+const rowCountEl     = document.getElementById('row-count');
+const btnPrev        = document.getElementById('btn-prev');
+const btnNext        = document.getElementById('btn-next');
+const pageInfoEl     = document.getElementById('page-info');
+const toastEl        = document.getElementById('toast');
+const btnRetry       = document.getElementById('btn-retry');
 
-// ─── JSONP (contorna CORS do Apps Script) ─────────────────────────
+// ─── Leitura via Google Visualization API ─────────────────────────
+// Esta API tem CORS correto e não exige autenticação para planilhas
+// compartilhadas como "qualquer pessoa com o link pode ver".
+// ─────────────────────────────────────────────────────────────────
 
-function fetchJsonp(url, timeoutMs = 45000) {
-  return new Promise((resolve, reject) => {
-    const cbName = '__pca' + Date.now();
-    const script = document.createElement('script');
-    let done = false;
+async function fetchSheetData() {
+  const response = await fetch(GVIZ_URL);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-    const cleanup = () => {
-      done = true;
-      delete window[cbName];
-      if (script.parentNode) script.remove();
-    };
+  const text = await response.text();
 
-    const timer = setTimeout(() => {
-      if (!done) {
-        cleanup();
-        reject(new Error('Tempo limite (45s). O Apps Script demorou demais ou não está respondendo.'));
+  // A resposta vem no formato:  /*O_o*/\ngoogle.visualization.Query.setResponse({...});
+  const jsonStr = text
+    .replace(/^\/\*[\s\S]*?\*\/\s*/, '')            // remove /*O_o*/
+    .replace(/^google\.visualization\.Query\.setResponse\(/, '') // remove wrapper
+    .replace(/\);\s*$/, '');                         // remove fechamento
+
+  const gviz = JSON.parse(jsonStr);
+
+  if (gviz.status !== 'ok') {
+    const msg = gviz.errors && gviz.errors[0] ? gviz.errors[0].message : 'Erro desconhecido';
+    throw new Error(msg);
+  }
+
+  // Cabeçalhos
+  headers = gviz.table.cols.map((c, i) => (c.label && c.label.trim()) ? c.label.trim() : `Col ${i + 1}`);
+
+  // Linhas
+  const rows = (gviz.table.rows || []).map((r, idx) => {
+    const cells = r.c || [];
+    const data  = headers.map((_, i) => {
+      const cell = cells[i];
+      if (!cell || cell.v === null || cell.v === undefined) return '';
+      // Datas no formato do gviz: "Date(2024,0,15)"
+      if (typeof cell.v === 'string' && cell.v.startsWith('Date(')) {
+        const parts = cell.v.replace('Date(', '').replace(')', '').split(',').map(Number);
+        return new Date(parts[0], parts[1], parts[2]).toLocaleDateString('pt-BR');
       }
-    }, timeoutMs);
-
-    window[cbName] = (data) => {
-      clearTimeout(timer);
-      cleanup();
-      resolve(data);
-    };
-
-    script.onerror = () => {
-      clearTimeout(timer);
-      cleanup();
-      reject(new Error(
-        'O Apps Script rejeitou a requisição. ' +
-        'Verifique se o código foi atualizado com a função respond() e reimplantado com "Nova versão".'
-      ));
-    };
-
-    script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cbName;
-    document.head.appendChild(script);
+      return cell.v;
+    });
+    return { data, sheetRow: idx + 2 }; // +2: linha 1 = cabeçalho, dados começam na linha 2
   });
+
+  return rows;
 }
 
 // ─── Init ─────────────────────────────────────────────────────────
 
 async function init() {
-  if (APPS_SCRIPT_URL === 'COLE_AQUI_A_URL_DO_APPS_SCRIPT') {
-    loadingEl.classList.add('hidden');
-    notConfiguredEl.classList.remove('hidden');
-    return;
-  }
-
   showLoading();
-
   try {
-    const json = await fetchJsonp(APPS_SCRIPT_URL);
-
-    if (!json.ok) throw new Error(json.error || 'Resposta inválida do servidor');
-
-    const [headerRow, ...dataRows] = json.data;
-    headers = headerRow.map((h, i) => (h !== '' && h !== null) ? String(h) : `Col ${i + 1}`);
-    allRows = dataRows.map((row, idx) => ({ data: row, sheetRow: idx + 2 }));
-
+    allRows = await fetchSheetData();
     buildHeader();
     buildLocalFilter();
     applyFilters();
-
     loadingEl.classList.add('hidden');
     tableContainer.classList.remove('hidden');
-
   } catch (err) {
     loadingEl.classList.add('hidden');
-    errorTextEl.textContent = `Não foi possível carregar os dados: ${err.message}`;
+    errorTextEl.textContent = `Erro ao carregar dados: ${err.message}`;
     errorEl.classList.remove('hidden');
   }
 }
 
 function showLoading() {
   errorEl.classList.add('hidden');
-  notConfiguredEl.classList.add('hidden');
   tableContainer.classList.add('hidden');
   loadingEl.classList.remove('hidden');
 }
@@ -128,25 +120,23 @@ function buildHeader() {
   tableHead.appendChild(tr);
 }
 
-// ─── Filter dropdown ──────────────────────────────────────────────
+// ─── Filtro LOCAL ─────────────────────────────────────────────────
 
 function buildLocalFilter() {
   const seen = new Set();
   allRows.forEach(item => {
     const val = item.data[COL_B_INDEX];
-    if (val !== null && val !== undefined && val !== '') seen.add(String(val));
+    if (val !== '' && val !== null && val !== undefined) seen.add(String(val));
   });
-
-  const locals = [...seen].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  locals.forEach(local => {
-    const opt = document.createElement('option');
-    opt.value   = local;
+  [...seen].sort((a, b) => a.localeCompare(b, 'pt-BR')).forEach(local => {
+    const opt     = document.createElement('option');
+    opt.value     = local;
     opt.textContent = local;
     filterLocal.appendChild(opt);
   });
 }
 
-// ─── Filters & search ─────────────────────────────────────────────
+// ─── Filtros e busca ──────────────────────────────────────────────
 
 function applyFilters() {
   const selectedLocal = filterLocal.value;
@@ -166,7 +156,7 @@ function applyFilters() {
   renderPage();
 }
 
-// ─── Render page ──────────────────────────────────────────────────
+// ─── Renderizar página ────────────────────────────────────────────
 
 function renderPage() {
   const total      = filteredRows.length;
@@ -184,7 +174,7 @@ function renderPage() {
       if (colIdx === COL_P_INDEX) {
         td.classList.add('col-p');
         td.dataset.sheetRow = item.sheetRow;
-        const display = formatCell(cell);
+        const display = String(cell ?? '');
         if (display !== '') {
           td.textContent = display;
           td.classList.add('edited-cell');
@@ -205,27 +195,24 @@ function renderPage() {
   btnNext.disabled = currentPage >= totalPages - 1;
 }
 
-// ─── Cell formatter ───────────────────────────────────────────────
+// ─── Formatação de células ────────────────────────────────────────
 
 function formatCell(cell) {
   if (cell === null || cell === undefined || cell === '') return '';
-  if (typeof cell === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(cell)) {
-    try { return new Date(cell).toLocaleDateString('pt-BR'); } catch (_) {}
-  }
   if (typeof cell === 'number') return cell.toLocaleString('pt-BR');
   return String(cell);
 }
 
-// ─── Inline edit (column P) ───────────────────────────────────────
+// ─── Edição inline — coluna P ─────────────────────────────────────
 
 function handleColPClick(e) {
   const td = e.currentTarget;
-  if (td.querySelector('input')) return; // already editing
+  if (td.querySelector('input')) return;
 
   const previousValue = td.classList.contains('edited-cell') ? td.textContent : '';
   const sheetRow      = Number(td.dataset.sheetRow);
 
-  const input = document.createElement('input');
+  const input     = document.createElement('input');
   input.type      = 'text';
   input.value     = previousValue;
   input.className = 'inline-input';
@@ -241,10 +228,8 @@ function handleColPClick(e) {
   const commit = (shouldSave) => {
     if (committed) return;
     committed = true;
-
     const newValue = input.value.trim();
     td.innerHTML   = '';
-
     if (shouldSave && newValue !== '') {
       td.textContent = newValue;
       td.classList.add('edited-cell');
@@ -258,26 +243,58 @@ function handleColPClick(e) {
   };
 
   input.addEventListener('blur',    () => commit(true));
-  input.addEventListener('keydown', (ev) => {
+  input.addEventListener('keydown', ev => {
     if (ev.key === 'Enter')  { ev.preventDefault(); commit(true); }
     if (ev.key === 'Escape') { commit(false); }
   });
 }
 
-// ─── Save to sheet ────────────────────────────────────────────────
+// ─── Escrita via Apps Script (JSONP) ─────────────────────────────
+
+function fetchJsonp(url, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const cbName = '__pca' + Date.now();
+    const script = document.createElement('script');
+    let done     = false;
+
+    const cleanup = () => {
+      done = true;
+      delete window[cbName];
+      if (script.parentNode) script.remove();
+    };
+
+    const timer = setTimeout(() => {
+      if (!done) { cleanup(); reject(new Error('Tempo limite ao salvar')); }
+    }, timeoutMs);
+
+    window[cbName] = data => {
+      clearTimeout(timer);
+      cleanup();
+      resolve(data);
+    };
+
+    script.onerror = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error('Erro ao salvar — verifique se o Apps Script está publicado para "Qualquer pessoa"'));
+    };
+
+    script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cbName;
+    document.head.appendChild(script);
+  });
+}
 
 async function saveToSheet(sheetRow, value) {
   try {
     const url  = `${APPS_SCRIPT_URL}?action=write&row=${sheetRow}&value=${encodeURIComponent(value)}`;
     const json = await fetchJsonp(url);
-
-    if (json.ok) {
+    if (json && json.ok) {
       showToast('Salvo na planilha ✓', 'success');
     } else {
-      showToast(`Erro ao salvar: ${json.error || 'desconhecido'}`, 'error');
+      showToast(`Erro: ${json && json.error ? json.error : 'resposta inválida'}`, 'error');
     }
   } catch (err) {
-    showToast('Erro de conexão ao salvar', 'error');
+    showToast(err.message, 'error');
   }
 }
 
@@ -289,7 +306,7 @@ function showToast(msg, type = '') {
   toastEl.textContent   = msg;
   toastEl.className     = `toast ${type}`;
   toastEl.style.opacity = '1';
-
+  toastEl.classList.remove('hidden');
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     toastEl.style.opacity = '0';
@@ -297,7 +314,7 @@ function showToast(msg, type = '') {
   }, 3000);
 }
 
-// ─── Event listeners ──────────────────────────────────────────────
+// ─── Eventos ──────────────────────────────────────────────────────
 
 filterLocal.addEventListener('change', applyFilters);
 searchInput.addEventListener('input',  applyFilters);
@@ -323,6 +340,6 @@ function scrollToTop() {
   document.getElementById('table-wrapper').scrollTop = 0;
 }
 
-// ─── Start ────────────────────────────────────────────────────────
+// ─── Início ───────────────────────────────────────────────────────
 
 init();
