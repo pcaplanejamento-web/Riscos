@@ -5,22 +5,25 @@ const SHEET_ID        = '15oK4dL7RcFp8hTqIFASH0dQdTvVqsweF-w3D6CDCS6w';
 const SHEET_NAME      = 'GERALDADOS';
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyEOJ-VMFPBMd0nQDoLiTjHDu6nbOpfokr_qjp8okJGwR-YrqGWAp6v_8YsFfQy8oFh/exec';
 
-// URL da API do Google Visualization — funciona direto no navegador sem CORS
-const GVIZ_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}`;
-
 // Índices das colunas (0-based)
 const COL_B_INDEX = 1;   // LOCAL
 const COL_P_INDEX = 15;  // QUANTIDADE UTILIZADA (editável)
 const PAGE_SIZE   = 100;
 
+// Tamanho de cada lote de busca. A API gviz tem limite de linhas por requisição,
+// então buscamos em paralelo para carregar todas as ~18.900 linhas rapidamente.
+const BATCH_SIZE  = 2000;
+const MAX_ROWS    = 22000; // teto seguro acima do total real
+
 // Estado
 let headers      = [];
-let allRows      = [];  // [{ data: [...], sheetRow: N }, ...]
+let allRows      = [];
 let filteredRows = [];
 let currentPage  = 0;
 
 // DOM
 const loadingEl      = document.getElementById('loading');
+const loadingMsg     = loadingEl.querySelector('p');
 const errorEl        = document.getElementById('error-msg');
 const errorTextEl    = document.getElementById('error-text');
 const tableContainer = document.getElementById('table-container');
@@ -36,50 +39,82 @@ const pageInfoEl     = document.getElementById('page-info');
 const toastEl        = document.getElementById('toast');
 const btnRetry       = document.getElementById('btn-retry');
 
-// ─── Leitura via Google Visualization API ─────────────────────────
-// Esta API tem CORS correto e não exige autenticação para planilhas
-// compartilhadas como "qualquer pessoa com o link pode ver".
+// ─── Busca de dados via Google Visualization API ───────────────────
+//
+// A API gviz/tq tem CORS correto para planilhas compartilhadas.
+// Como ela limita linhas por requisição, buscamos em PARALELO por
+// lotes de BATCH_SIZE linhas, usando SELECT * LIMIT x OFFSET y.
 // ─────────────────────────────────────────────────────────────────
 
-async function fetchSheetData() {
-  const response = await fetch(GVIZ_URL);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+function gvizUrl(limit, offset) {
+  const tq = encodeURIComponent(`SELECT * LIMIT ${limit} OFFSET ${offset}`);
+  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq` +
+         `?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}&tq=${tq}`;
+}
 
-  const text = await response.text();
-
-  // A resposta vem no formato:  /*O_o*/\ngoogle.visualization.Query.setResponse({...});
+function parseGvizText(text) {
   const jsonStr = text
-    .replace(/^\/\*[\s\S]*?\*\/\s*/, '')            // remove /*O_o*/
-    .replace(/^google\.visualization\.Query\.setResponse\(/, '') // remove wrapper
-    .replace(/\);\s*$/, '');                         // remove fechamento
+    .replace(/^\/\*[\s\S]*?\*\/\s*/, '')
+    .replace(/^google\.visualization\.Query\.setResponse\(/, '')
+    .replace(/\);\s*$/, '');
 
   const gviz = JSON.parse(jsonStr);
 
   if (gviz.status !== 'ok') {
-    const msg = gviz.errors && gviz.errors[0] ? gviz.errors[0].message : 'Erro desconhecido';
+    const msg = (gviz.errors && gviz.errors[0]) ? gviz.errors[0].message : 'Erro na API';
     throw new Error(msg);
   }
 
-  // Cabeçalhos
-  headers = gviz.table.cols.map((c, i) => (c.label && c.label.trim()) ? c.label.trim() : `Col ${i + 1}`);
-
-  // Linhas
-  const rows = (gviz.table.rows || []).map((r, idx) => {
+  const cols = gviz.table.cols.map((c, i) => (c.label && c.label.trim()) ? c.label.trim() : `Col ${i + 1}`);
+  const rows = (gviz.table.rows || []).map(r => {
     const cells = r.c || [];
-    const data  = headers.map((_, i) => {
+    return cols.map((_, i) => {
       const cell = cells[i];
       if (!cell || cell.v === null || cell.v === undefined) return '';
-      // Datas no formato do gviz: "Date(2024,0,15)"
       if (typeof cell.v === 'string' && cell.v.startsWith('Date(')) {
         const parts = cell.v.replace('Date(', '').replace(')', '').split(',').map(Number);
         return new Date(parts[0], parts[1], parts[2]).toLocaleDateString('pt-BR');
       }
       return cell.v;
     });
-    return { data, sheetRow: idx + 2 }; // +2: linha 1 = cabeçalho, dados começam na linha 2
   });
 
-  return rows;
+  return { cols, rows };
+}
+
+async function fetchBatch(offset) {
+  const res  = await fetch(gvizUrl(BATCH_SIZE, offset));
+  const text = await res.text();
+  return parseGvizText(text);
+}
+
+async function fetchAllRows() {
+  const numBatches = Math.ceil(MAX_ROWS / BATCH_SIZE);
+  loadingMsg.textContent = 'Carregando dados da planilha…';
+
+  // Dispara todos os lotes em paralelo
+  const promises = Array.from({ length: numBatches }, (_, i) =>
+    fetchBatch(i * BATCH_SIZE).catch(() => ({ cols: [], rows: [] }))
+  );
+
+  const results = await Promise.all(promises);
+
+  // Cabeçalhos vêm do primeiro lote
+  headers = results[0].cols;
+
+  // Monta allRows combinando todos os lotes em ordem
+  const combined = [];
+  for (let i = 0; i < results.length; i++) {
+    const { rows } = results[i];
+    if (rows.length === 0) break; // lote vazio = chegamos ao fim
+    const offset = i * BATCH_SIZE;
+    rows.forEach((row, j) => {
+      combined.push({ data: row, sheetRow: offset + j + 2 }); // +2: header=linha1
+    });
+    if (rows.length < BATCH_SIZE) break; // último lote parcial = fim
+  }
+
+  return combined;
 }
 
 // ─── Init ─────────────────────────────────────────────────────────
@@ -87,7 +122,7 @@ async function fetchSheetData() {
 async function init() {
   showLoading();
   try {
-    allRows = await fetchSheetData();
+    allRows = await fetchAllRows();
     buildHeader();
     buildLocalFilter();
     applyFilters();
@@ -106,7 +141,7 @@ function showLoading() {
   loadingEl.classList.remove('hidden');
 }
 
-// ─── Header ───────────────────────────────────────────────────────
+// ─── Cabeçalho ────────────────────────────────────────────────────
 
 function buildHeader() {
   tableHead.innerHTML = '';
@@ -120,7 +155,7 @@ function buildHeader() {
   tableHead.appendChild(tr);
 }
 
-// ─── Filtro LOCAL ─────────────────────────────────────────────────
+// ─── Dropdown LOCAL ───────────────────────────────────────────────
 
 function buildLocalFilter() {
   const seen = new Set();
@@ -129,8 +164,8 @@ function buildLocalFilter() {
     if (val !== '' && val !== null && val !== undefined) seen.add(String(val));
   });
   [...seen].sort((a, b) => a.localeCompare(b, 'pt-BR')).forEach(local => {
-    const opt     = document.createElement('option');
-    opt.value     = local;
+    const opt       = document.createElement('option');
+    opt.value       = local;
     opt.textContent = local;
     filterLocal.appendChild(opt);
   });
@@ -141,7 +176,6 @@ function buildLocalFilter() {
 function applyFilters() {
   const selectedLocal = filterLocal.value;
   const searchTerm    = searchInput.value.toLowerCase().trim();
-
   clearSearchBtn.hidden = searchTerm === '';
 
   filteredRows = allRows.filter(item => {
@@ -195,7 +229,7 @@ function renderPage() {
   btnNext.disabled = currentPage >= totalPages - 1;
 }
 
-// ─── Formatação de células ────────────────────────────────────────
+// ─── Formatação ───────────────────────────────────────────────────
 
 function formatCell(cell) {
   if (cell === null || cell === undefined || cell === '') return '';
@@ -267,16 +301,12 @@ function fetchJsonp(url, timeoutMs = 30000) {
       if (!done) { cleanup(); reject(new Error('Tempo limite ao salvar')); }
     }, timeoutMs);
 
-    window[cbName] = data => {
-      clearTimeout(timer);
-      cleanup();
-      resolve(data);
-    };
+    window[cbName] = data => { clearTimeout(timer); cleanup(); resolve(data); };
 
     script.onerror = () => {
       clearTimeout(timer);
       cleanup();
-      reject(new Error('Erro ao salvar — verifique se o Apps Script está publicado para "Qualquer pessoa"'));
+      reject(new Error('Erro ao salvar — verifique o deploy do Apps Script'));
     };
 
     script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cbName;
