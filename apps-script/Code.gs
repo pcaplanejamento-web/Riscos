@@ -16,33 +16,40 @@ const SHEET_ID   = '15oK4dL7RcFp8hTqIFASH0dQdTvVqsweF-w3D6CDCS6w';
 const SHEET_NAME = 'GERALDADOS';
 
 function doGet(e) {
+  const callback = e.parameter ? e.parameter.callback : null;
+
   try {
     const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
 
-    // Operação de escrita via GET (evita problemas de CORS com preflight)
     if (e.parameter && e.parameter.action === 'write') {
       const row   = Number(e.parameter.row);
       const value = e.parameter.value;
 
       if (!row || row < 2) {
-        return jsonResponse({ ok: false, error: 'Linha inválida' });
+        return respond({ ok: false, error: 'Linha inválida' }, callback);
       }
 
       sheet.getRange(row, 16).setValue(value); // coluna P = índice 16
-      return jsonResponse({ ok: true });
+      return respond({ ok: true }, callback);
     }
 
-    // Leitura de todos os dados
     const data = sheet.getDataRange().getValues();
-    return jsonResponse({ ok: true, data: data });
+    return respond({ ok: true, data: data }, callback);
 
   } catch (err) {
-    return jsonResponse({ ok: false, error: err.message });
+    return respond({ ok: false, error: err.message }, callback);
   }
 }
 
-function jsonResponse(obj) {
+// Suporta tanto JSON puro quanto JSONP (para evitar CORS do navegador)
+function respond(obj, callback) {
+  const json = JSON.stringify(obj);
+  if (callback) {
+    return ContentService
+      .createTextOutput(callback + '(' + json + ')')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
   return ContentService
-    .createTextOutput(JSON.stringify(obj))
+    .createTextOutput(json)
     .setMimeType(ContentService.MimeType.JSON);
 }

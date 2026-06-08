@@ -32,6 +32,30 @@ const pageInfoEl      = document.getElementById('page-info');
 const toastEl         = document.getElementById('toast');
 const btnRetry        = document.getElementById('btn-retry');
 
+// ─── JSONP (contorna CORS do Apps Script) ─────────────────────────
+
+function fetchJsonp(url) {
+  return new Promise((resolve, reject) => {
+    const cbName = '__pca' + Date.now();
+    const script = document.createElement('script');
+
+    window[cbName] = (data) => {
+      delete window[cbName];
+      script.remove();
+      resolve(data);
+    };
+
+    script.onerror = () => {
+      delete window[cbName];
+      script.remove();
+      reject(new Error('Falha na requisição ao Apps Script'));
+    };
+
+    script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cbName;
+    document.head.appendChild(script);
+  });
+}
+
 // ─── Init ─────────────────────────────────────────────────────────
 
 async function init() {
@@ -44,8 +68,7 @@ async function init() {
   showLoading();
 
   try {
-    const res  = await fetch(APPS_SCRIPT_URL);
-    const json = await res.json();
+    const json = await fetchJsonp(APPS_SCRIPT_URL);
 
     if (!json.ok) throw new Error(json.error || 'Resposta inválida do servidor');
 
@@ -228,9 +251,8 @@ function handleColPClick(e) {
 
 async function saveToSheet(sheetRow, value) {
   try {
-    const url = `${APPS_SCRIPT_URL}?action=write&row=${sheetRow}&value=${encodeURIComponent(value)}`;
-    const res  = await fetch(url);
-    const json = await res.json();
+    const url  = `${APPS_SCRIPT_URL}?action=write&row=${sheetRow}&value=${encodeURIComponent(value)}`;
+    const json = await fetchJsonp(url);
 
     if (json.ok) {
       showToast('Salvo na planilha ✓', 'success');
