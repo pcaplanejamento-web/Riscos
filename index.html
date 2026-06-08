@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PCA 2026 — Planejamento de Contratações Anuais</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="header-title">
+        <span class="header-badge">PCA</span>
+        <div>
+          <h1>Planejamento de Contratações Anuais</h1>
+          <p class="header-subtitle">2026 — GERALDADOS</p>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <div class="filter-group">
+        <label for="filter-local">Local</label>
+        <select id="filter-local">
+          <option value="">Todos os locais</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="search">Buscar</label>
+        <div class="search-wrapper">
+          <svg class="search-icon" viewBox="0 0 20 20" fill="none">
+            <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M13 13L17 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          <input type="text" id="search" placeholder="Buscar em todos os campos…" autocomplete="off">
+          <button id="btn-clear-search" class="clear-btn" title="Limpar busca" hidden>✕</button>
+        </div>
+      </div>
+    </div>
+    <div class="toolbar-right">
+      <span id="row-count" class="row-count"></span>
+      <span class="edit-hint">💡 Clique na coluna <strong>P</strong> para editar</span>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading" class="state-screen">
+    <div class="spinner"></div>
+    <p>Carregando dados da planilha…</p>
+  </div>
+
+  <!-- Error -->
+  <div id="error-msg" class="state-screen hidden">
+    <div class="error-icon">⚠️</div>
+    <p id="error-text"></p>
+    <button id="btn-retry" class="btn-primary">Tentar novamente</button>
+  </div>
+
+  <!-- Not configured -->
+  <div id="not-configured" class="state-screen hidden">
+    <div class="config-card">
+      <h2>⚙️ Configuração necessária</h2>
+      <p>Para usar o sistema, você precisa:</p>
+      <ol>
+        <li>Abra a planilha Google Sheets e acesse <strong>Extensões → Apps Script</strong></li>
+        <li>Cole o conteúdo de <code>apps-script/Code.gs</code> e salve</li>
+        <li>Clique em <strong>Implantar → Novo implante</strong>, tipo <em>Aplicativo Web</em>, acesso <em>Qualquer pessoa</em></li>
+        <li>Copie a URL gerada e cole em <code>script.js</code> na variável <code>APPS_SCRIPT_URL</code></li>
+        <li>Faça o push para o GitHub e recarregue esta página</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div id="table-container" class="hidden">
+    <div id="table-wrapper">
+      <table id="main-table">
+        <thead id="table-head"></thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+
+    <div class="pagination">
+      <button id="btn-prev" class="btn-page" disabled>← Anterior</button>
+      <span id="page-info">Página 1 de 1</span>
+      <button id="btn-next" class="btn-page" disabled>Próxima →</button>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
