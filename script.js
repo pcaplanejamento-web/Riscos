@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────
 // CONFIGURAÇÃO — substitua pela URL gerada ao implantar o Apps Script
 // ─────────────────────────────────────────────────────────────────
-const APPS_SCRIPT_URL = 'COLE_AQUI_A_URL_DO_APPS_SCRIPT';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyEOJ-VMFPBMd0nQDoLiTjHDu6nbOpfokr_qjp8okJGwR-YrqGWAp6v_8YsFfQy8oFh/exec';
 
 // Índices das colunas (0-based)
 const COL_B_INDEX = 1;   // LOCAL
