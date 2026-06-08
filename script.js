@@ -34,21 +34,38 @@ const btnRetry        = document.getElementById('btn-retry');
 
 // ─── JSONP (contorna CORS do Apps Script) ─────────────────────────
 
-function fetchJsonp(url) {
+function fetchJsonp(url, timeoutMs = 45000) {
   return new Promise((resolve, reject) => {
     const cbName = '__pca' + Date.now();
     const script = document.createElement('script');
+    let done = false;
+
+    const cleanup = () => {
+      done = true;
+      delete window[cbName];
+      if (script.parentNode) script.remove();
+    };
+
+    const timer = setTimeout(() => {
+      if (!done) {
+        cleanup();
+        reject(new Error('Tempo limite (45s). O Apps Script demorou demais ou não está respondendo.'));
+      }
+    }, timeoutMs);
 
     window[cbName] = (data) => {
-      delete window[cbName];
-      script.remove();
+      clearTimeout(timer);
+      cleanup();
       resolve(data);
     };
 
     script.onerror = () => {
-      delete window[cbName];
-      script.remove();
-      reject(new Error('Falha na requisição ao Apps Script'));
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error(
+        'O Apps Script rejeitou a requisição. ' +
+        'Verifique se o código foi atualizado com a função respond() e reimplantado com "Nova versão".'
+      ));
     };
 
     script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cbName;
